@@ -3,50 +3,53 @@ name: Build iOS IPA
 on:
   push:
     branches: [main]
-  workflow_dispatch: # Allows you to trigger manually from GitHub website
+  workflow_dispatch:
 
 jobs:
   build-ios:
     runs-on: macos-latest
 
     steps:
-      # 1. Download your code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. Set up Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          
 
-      # 3. Install project dependencies
       - name: Install dependencies
         run: npm install
 
-      # 4. Create placeholder app icon (white square)
       - name: Create placeholder assets
         run: |
           mkdir -p assets
-          pip3 install Pillow --quiet
           python3 -c "
-          from PIL import Image
-          Image.new('RGB', (1024, 1024), 'white').save('assets/icon.png')
-          Image.new('RGB', (1284, 2778), 'white').save('assets/splash.png')
+          import struct, zlib
+          def make_png(w, h, filename):
+              raw = b''.join(b'\x00' + b'\xff' * (w * 3) for _ in range(h))
+              def chunk(name, data):
+                  c = name + data
+                  return struct.pack('>I', len(data)) + c + struct.pack('>I', zlib.crc32(c) & 0xffffffff)
+              ihdr = struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)
+              with open(filename, 'wb') as f:
+                  f.write(b'\x89PNG\r\n\x1a\n')
+                  f.write(chunk(b'IHDR', ihdr))
+                  f.write(chunk(b'IDAT', zlib.compress(raw)))
+                  f.write(chunk(b'IEND', b''))
+          make_png(1024, 1024, 'assets/icon.png')
+          make_png(1284, 2778, 'assets/splash.png')
+          print('Assets created')
           "
 
-      # 5. Generate the native iOS project from Expo
       - name: Expo prebuild
         run: npx expo prebuild --platform ios --clean --no-install
 
-      # 6. Install iOS native dependencies
       - name: Install CocoaPods
         run: |
           cd ios
           pod install --repo-update
 
-      # 7. Build the app (unsigned — Sideloadly will sign it later)
       - name: Build unsigned IPA
         run: |
           xcodebuild archive \
@@ -60,12 +63,10 @@ jobs:
             -allowProvisioningUpdates NO \
             | xcpretty || true
 
-          # Package the .app into a .ipa file
           mkdir -p build/Payload
           cp -r "$PWD/build/finance.xcarchive/Products/Applications/finance.app" build/Payload/
           cd build && zip -r finance.ipa Payload/
 
-      # 8. Upload the IPA so you can download it
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
